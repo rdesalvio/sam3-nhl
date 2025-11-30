@@ -5,7 +5,7 @@ from sam3.model_builder import build_sam3_video_predictor
 
 # Initialize SAM3 video predictor
 gpus_to_use = [torch.cuda.current_device()]
-video_predictor = build_sam3_video_predictor(gpus_to_use=gpus_to_use)
+video_predictor = build_sam3_video_predictor(gpus_to_use)
 
 # Set video path (can be JPEG folder or MP4 file)
 video_path = "videos/short_example.mp4"
@@ -93,42 +93,83 @@ while cap.isOpened():
     if frame_idx in outputs_per_frame:
         outputs = outputs_per_frame[frame_idx]
 
-        # Draw bounding boxes for each detected object
-        for obj in outputs:
-            mask = obj["mask"]
-            object_id = obj["object_id"]
-            score = obj.get("score", 1.0)
+        # Handle the actual SAM3 output structure
+        # outputs is a dict with keys: out_obj_ids, out_probs, out_boxes_xywh, out_binary_masks
+        if isinstance(outputs, dict) and 'out_obj_ids' in outputs:
+            obj_ids = outputs.get('out_obj_ids', [])
+            probs = outputs.get('out_probs', [])
+            boxes_xywh = outputs.get('out_boxes_xywh', [])
+            masks = outputs.get('out_binary_masks', [])
 
-            # Convert mask to bounding box
-            bbox = mask_to_bbox(mask)
+            # Debug on first frame
+            if frame_idx == 0:
+                print(f"\nFrame 0 debug info:")
+                print(f"  obj_ids type: {type(obj_ids)}, shape: {obj_ids.shape if hasattr(obj_ids, 'shape') else 'N/A'}")
+                print(f"  probs type: {type(probs)}, shape: {probs.shape if hasattr(probs, 'shape') else 'N/A'}")
+                print(f"  boxes_xywh type: {type(boxes_xywh)}, shape: {boxes_xywh.shape if hasattr(boxes_xywh, 'shape') else 'N/A'}")
+                print(f"  obj_ids: {obj_ids}")
+                print(f"  boxes_xywh: {boxes_xywh}")
 
-            if bbox is not None:
-                x1, y1, x2, y2 = bbox
+            # Convert to numpy if needed
+            if hasattr(obj_ids, 'cpu'):
+                obj_ids = obj_ids.cpu().numpy()
+            if hasattr(probs, 'cpu'):
+                probs = probs.cpu().numpy()
+            if hasattr(boxes_xywh, 'cpu'):
+                boxes_xywh = boxes_xywh.cpu().numpy()
 
-                # Draw bounding box
-                color = (0, 255, 0)  # Green
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            # Debug after conversion
+            if frame_idx == 0:
+                print(f"\nAfter numpy conversion:")
+                print(f"  obj_ids length: {len(obj_ids)}")
+                print(f"  boxes_xywh length: {len(boxes_xywh)}")
 
-                # Draw label with object ID and score
-                label = f"ID:{object_id} {score:.2f}"
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.6
-                thickness = 2
+            # Draw bounding boxes for each detected object
+            num_drawn = 0
+            for i in range(len(obj_ids)):
+                object_id = obj_ids[i]
+                score = probs[i] if i < len(probs) else 1.0
 
-                # Get text size for background
-                (text_width, text_height), baseline = cv2.getTextSize(
-                    label, font, font_scale, thickness
-                )
+                # Get bounding box in xywh format and convert to xyxy
+                if i < len(boxes_xywh):
+                    x, y, w, h = boxes_xywh[i]
 
-                # Draw background rectangle for text
-                cv2.rectangle(frame,
-                            (x1, y1 - text_height - 10),
-                            (x1 + text_width, y1),
-                            color, -1)
+                    # Coordinates are normalized (0-1), scale to image dimensions
+                    x1 = int(x * width)
+                    y1 = int(y * height)
+                    x2 = int((x + w) * width)
+                    y2 = int((y + h) * height)
 
-                # Draw text
-                cv2.putText(frame, label, (x1, y1 - 5),
-                          font, font_scale, (0, 0, 0), thickness)
+                    # Draw bounding box
+                    color = (0, 255, 0)  # Green
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                    # Draw label with object ID and score
+                    label = f"ID:{object_id} {score:.2f}"
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.6
+                    thickness = 2
+
+                    # Get text size for background
+                    (text_width, text_height), baseline = cv2.getTextSize(
+                        label, font, font_scale, thickness
+                    )
+
+                    # Draw background rectangle for text
+                    cv2.rectangle(frame,
+                                (x1, y1 - text_height - 10),
+                                (x1 + text_width, y1),
+                                color, -1)
+
+                    # Draw text
+                    cv2.putText(frame, label, (x1, y1 - 5),
+                              font, font_scale, (0, 0, 0), thickness)
+
+                    num_drawn += 1
+
+            # Debug: print how many boxes were drawn on first frame
+            if frame_idx == 0:
+                print(f"  Drew {num_drawn} bounding boxes on frame 0")
 
     # Write frame to output video
     out.write(frame)
